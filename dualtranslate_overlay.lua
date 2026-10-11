@@ -121,9 +121,10 @@ local function build_css(path, options)
         local selector = entry.selector
         if selector and selector ~= "" then
             if translation_visible and entry.translation and entry.translation ~= "" then
+                local pseudo = entry.pseudo == "before" and "before" or "after"
                 table.insert(rules, string.format(
-                    "%s::after{content:%s!important;display:block!important;white-space:pre-wrap!important;color:%s!important;font-size:%s!important;%sline-height:130%%!important;margin:0!important;padding:0!important;}",
-                    selector, css_string(entry.translation), translation_color, translation_size, font_family_css))
+                    "%s::%s{content:%s!important;display:block!important;white-space:pre-wrap!important;color:%s!important;font-size:%s!important;%sline-height:130%%!important;margin:0!important;padding:0!important;}",
+                    selector, pseudo, css_string(entry.translation), translation_color, translation_size, font_family_css))
             end
         end
     end

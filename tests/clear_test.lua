@@ -86,15 +86,12 @@ local stubs = {
     ["libs/libkoreader-lfs"] = {
         attributes = function(p, m)
             if m == "mode" then
-                local kind = io.popen('stat -c "%F" "' .. p .. '" 2>/dev/null'):read("*l")
-                if kind == "directory" then return "directory" end
-                if kind == "regular file" or kind == "regular empty file" then return "file" end
-                return nil
+                local probe = io.popen('if test -d "' .. p .. '"; then echo directory; elif test -f "' .. p .. '"; then echo file; fi 2>/dev/null')
+                local kind = probe and probe:read("*l") or nil
+                if probe then probe:close() end
+                return kind
             end
-            if m == "modification" then
-                local t = io.popen('stat -c "%Y" "' .. p .. '" 2>/dev/null'):read("*l")
-                return tonumber(t) or 0
-            end
+            if m == "modification" then return os.time() end
             return nil
         end,
         mkdir = function(p) os.execute("mkdir -p " .. p) return true end,

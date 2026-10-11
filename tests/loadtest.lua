@@ -36,7 +36,8 @@ _G.G_reader_settings = {
     saveSetting = function(self, key, value) settings[key] = value end,
 }
 _G.UIManager = stubs["ui/uimanager"]
-local plugin_dir = "/home/user/Doubao/chats/38441681735635970/kotranslate_xplatform"
+local source_path = debug.getinfo(1, "S").source:gsub("^@", "")
+local plugin_dir = source_path:match("^(.*)/tests/[^/]+$") or "."
 package.path = plugin_dir .. "/?.lua;" .. package.path
 local dualtranslate = dofile(plugin_dir .. "/main.lua")
 dualtranslate.ui = { menu = { registerToMainMenu = function(self, plugin) plugin:addToMainMenu({}) end }, document = nil }

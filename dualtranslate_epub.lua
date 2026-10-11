@@ -1,9 +1,9 @@
 -- Small EPUB reader/writer used by DualTranslate's chapter mode.
 -- It intentionally handles XHTML as text: the original markup is preserved and
--- only translated block paragraphs are inserted after their source element.
+-- translated block paragraphs are exposed as generated CSS layers; nested-list
+-- items may place the outer translation before the child list.
 
 local Epub = {}
-local Archiver = require("ffi/archiver")
 local Overlay = require("dualtranslate_overlay")
 local Tools = require("dualtranslate_tools")
 local DataStorage = require("datastorage")
@@ -15,14 +15,6 @@ local function read_file(path)
     local data = file:read("*a")
     file:close()
     return data
-end
-
-local function write_file(path, data)
-    local file = io.open(path, "wb")
-    if not file then return false end
-    file:write(data)
-    file:close()
-    return true
 end
 
 local function attr(tag, name)
@@ -64,14 +56,6 @@ local function html_to_text(html)
     return html:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function html_escape(text)
-    return tostring(text)
-        :gsub("&", "&amp;")
-        :gsub("<", "&lt;")
-        :gsub(">", "&gt;")
-        :gsub('"', "&quot;")
-end
-
 -- Throttled progress writer.  Whole-book runs call this once per paragraph,
 -- which on a several-thousand-paragraph book means thousands of open/write/
 -- close cycles; batching the writes to ~4/s keeps the progress dialog smooth
@@ -105,7 +89,7 @@ local function looks_translatable(text)
     return text:match("[\128-\255]") ~= nil
 end
 
-function Epub:resolve(book_path, work_dir, fragment)
+function Epub:resolve(_, work_dir, fragment)
     local container = read_file(work_dir .. "/META-INF/container.xml")
     if not container then return nil, "找不到 META-INF/container.xml" end
     local opf_path
@@ -157,7 +141,7 @@ function Epub:resolve(book_path, work_dir, fragment)
 end
 
 local overlay_target_tags = {
-    p = true, h1 = true, h2 = true, h3 = true, h4 = true, h5 = true, h6 = true,
+    p = true, li = true, h1 = true, h2 = true, h3 = true, h4 = true, h5 = true, h6 = true,
     figcaption = true, dt = true, dd = true,
 }
 
@@ -166,6 +150,40 @@ local void_tags = {
     img = true, input = true, link = true, meta = true, param = true,
     source = true, track = true, wbr = true,
 }
+
+-- Remove nested lists from an outer li's translation source. The outer item
+-- keeps its own text, while each child li becomes its own translation unit.
+local function remove_nested_lists(html)
+    local parts = {}
+    local cursor = 1
+    local depth = 0
+    while true do
+        local tag_start, tag_end = html:find("<[^>]*>", cursor)
+        if not tag_start then
+            if depth == 0 then table.insert(parts, html:sub(cursor)) end
+            break
+        end
+        if depth == 0 then
+            table.insert(parts, html:sub(cursor, tag_start - 1))
+        end
+        local raw = html:sub(tag_start, tag_end)
+        local closing = raw:match("^<%s*/") ~= nil
+        local name = raw:match("^<%s*/?%s*([%w_:%-]+)")
+        name = name and name:lower():gsub("^.-:", "")
+        if name == "ul" or name == "ol" then
+            local self_closing = raw:match("/%s*>$") ~= nil
+            if closing then
+                if depth > 0 then depth = depth - 1 end
+            elseif not self_closing then
+                depth = depth + 1
+            end
+        elseif depth == 0 then
+            table.insert(parts, raw)
+        end
+        cursor = tag_end + 1
+    end
+    return table.concat(parts)
+end
 
 local function css_attribute(value)
     return tostring(value or ""):gsub("\\", "\\\\"):gsub('"', '\\"')
@@ -199,12 +217,17 @@ local function collect_overlay_candidates(document, relative, fragment_index, di
                         local node = stack[found]
                         if node.target and node.inner_start then
                             local inner = document:sub(node.inner_start, tag_start - 1)
+                            if node.name == "li" then
+                                inner = remove_nested_lists(inner)
+                            end
                             local source = html_to_text(inner)
                             if looks_translatable(source) then
                                 table.insert(candidates, {
                                     source = source,
                                     selector = 'DocFragment[Source="' .. css_attribute(relative)
-                                        .. '"] > body' .. node.path,
+                                        .. '"] > body'
+                                        .. (node.first_nested_list_path or node.path),
+                                    pseudo = node.first_nested_list_path and "before" or "after",
                                     xpointer = "/body/DocFragment"
                                         .. (fragment_index > 1
                                             and ("[" .. tostring(fragment_index) .. "]") or "")
@@ -212,7 +235,7 @@ local function collect_overlay_candidates(document, relative, fragment_index, di
                                 })
                             end
                         end
-                        for index = #stack, found, -1 do table.remove(stack) end
+                        for _ = #stack, found, -1 do table.remove(stack) end
                     end
                 else
                     local parent = stack[#stack]
@@ -229,6 +252,10 @@ local function collect_overlay_candidates(document, relative, fragment_index, di
                         xpath = xpath .. "/" .. name
                             .. (parent.counts[name] > 1
                                 and ("[" .. tostring(parent.counts[name]) .. "]") or "")
+                    end
+                    if parent.name == "li" and (name == "ul" or name == "ol")
+                        and not parent.first_nested_list_path then
+                        parent.first_nested_list_path = path
                     end
                     local node = {
                         name = name,
@@ -322,7 +349,7 @@ function Epub:translate_overlay(book_path, fragment, target_lang, source_lang,
         for _, entry in ipairs(previous.entries or {}) do
             if entry.selector and entry.translation then
                 entries[#entries + 1] = entry
-                entry_index[entry.selector] = #entries
+                entry_index[entry.xpointer or entry.selector] = #entries
             end
         end
         if type(previous.chapters) == "table" then
@@ -377,7 +404,8 @@ function Epub:translate_overlay(book_path, fragment, target_lang, source_lang,
                 local candidate = candidates[index]
                 local offset = #sources + 1
                 sources[offset] = candidate.source
-                local old_index = entry_index[candidate.selector]
+                local entry_key = candidate.xpointer or candidate.selector
+                local old_index = entry_index[entry_key]
                 local old = old_index and entries[old_index]
                 if old and old.source == candidate.source and old.translation ~= "" then
                     translations[offset] = old.translation
@@ -406,13 +434,14 @@ function Epub:translate_overlay(book_path, fragment, target_lang, source_lang,
                 if translated and translated ~= "" then
                     local entry = { selector = candidate.selector,
                         xpointer = candidate.xpointer, source = source,
-                        translation = translated }
-                    local existing = entry_index[entry.selector]
+                        translation = translated, pseudo = candidate.pseudo }
+                    local entry_key = candidate.xpointer or candidate.selector
+                    local existing = entry_index[entry_key]
                     if existing then
                         entries[existing] = entry
                     else
                         entries[#entries + 1] = entry
-                        entry_index[entry.selector] = #entries
+                        entry_index[entry_key] = #entries
                     end
                     translated_count = translated_count + 1
                 else

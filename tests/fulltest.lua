@@ -106,7 +106,12 @@ print("== 2. Overlay CSS ==")
 do
     local JSON_stub = {
         encode = function(t) return '{"entries":[{"selector":"p:first","translation":"你好"}]}' end,
-        decode = function(s) return { entries = { { selector = "p:first", translation = "你好" } } } end,
+        decode = function(s)
+            if s:find('"pseudo":"before"', 1, true) then
+                return { entries = { { selector = "ul:first", translation = "外层译文", pseudo = "before" } } }
+            end
+            return { entries = { { selector = "p:first", translation = "你好" } } }
+        end,
     }
     package.preload["json"] = function() return JSON_stub end
     package.preload["libs/libkoreader-lfs"] = function()
@@ -137,6 +142,11 @@ do
     check("buildCss 含 ::after", css:find("::after") ~= nil)
     check("buildCss 含字体族", css:find("font-family:serif!important", 1, true) ~= nil)
     check("buildCss 含颜色", css:find("color:#666666!important") ~= nil)
+    local before_file = io.open("/tmp/dualtranslate_overlay_before_test.json", "w")
+    before_file:write('{"entries":[{"selector":"ul:first","translation":"外层译文","pseudo":"before"}]}')
+    before_file:close()
+    local css_before = Overlay.buildCss("/tmp/dualtranslate_overlay_before_test.json", { translation_visible = true })
+    check("buildCss 支持 ::before", css_before:find("ul:first::before", 1, true) ~= nil)
     -- 隐藏时不生成规则
     local css_hidden = Overlay.buildCss("/tmp/dualtranslate_overlay_test.json", { translation_visible = false })
     check("隐藏时无 ::after 规则", css_hidden:find("::after") == nil)
