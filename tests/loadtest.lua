@@ -8,6 +8,10 @@ local function template(fmt, ...)
 end
 local stubs = {
     ["logger"] = { warn = function() end, err = function() end, info = function() end, dbg = function() end },
+    ["dispatcher"] = {
+        actions = {},
+        registerAction = function(self, name, value) self.actions[name] = value end,
+    },
     ["gettext"] = gettext,
     ["datastorage"] = { getDataDir = function() return "/tmp/dt_data" end },
     ["util"] = { makePath = function() return true end, trim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end, removeFile = function() end },
@@ -51,7 +55,41 @@ assert(dualtranslate:getSetting("nonexistent", "default") == "default")
 assert(type(dualtranslate.cancelTranslation) == "function", "cancelTranslation not attached")
 assert(type(dualtranslate.buildTranslationQueueMenu) == "function", "buildTranslationQueueMenu not attached")
 assert(type(dualtranslate.reopenTranslationProgress) == "function", "reopenTranslationProgress missing")
-print("attach points: true")
+
+local dispatcher_actions = stubs["dispatcher"].actions
+local expected_actions = {
+    dualtranslate_translate_current_chapter = "DualTranslateTranslateCurrentChapter",
+    dualtranslate_translate_book = "DualTranslateTranslateBook",
+    dualtranslate_toggle_translation = "DualTranslateToggleTranslation",
+}
+for action, event in pairs(expected_actions) do
+    assert(dispatcher_actions[action], "missing Dispatcher action: " .. action)
+    assert(dispatcher_actions[action].event == event, "wrong event for " .. action)
+    assert(dispatcher_actions[action].category == "none", "wrong category for " .. action)
+    assert(dispatcher_actions[action].reader == true, "action is not reader-only: " .. action)
+    assert(type(dispatcher_actions[action].condition_func) == "function",
+        "missing EPUB condition for " .. action)
+end
+print("Dispatcher actions: true")
+
+local action_calls = {}
+local original_translate_book = dualtranslate.translateBook
+dualtranslate.translateBook = function(self, ...)
+    action_calls[#action_calls + 1] = { ... }
+end
+dualtranslate:onDualTranslateTranslateCurrentChapter()
+dualtranslate:onDualTranslateTranslateBook()
+assert(action_calls[1][1] == false, "current-chapter action did not request one chapter")
+assert(action_calls[2][1] == true and action_calls[2][5] == true,
+    "whole-book action did not force whole-book mode")
+dualtranslate.translateBook = original_translate_book
+local toggled = false
+local original_toggle = dualtranslate.toggleTranslationVisible
+dualtranslate.toggleTranslationVisible = function() toggled = true end
+dualtranslate:onDualTranslateToggleTranslation()
+assert(toggled, "toggle action did not call toggleTranslationVisible")
+dualtranslate.toggleTranslationVisible = original_toggle
+print("Dispatcher handlers: true")
 local menu_items = {}
 local ok2, err2 = pcall(function() dualtranslate:addToMainMenu(menu_items) end)
 assert(ok2, "menu build failed: " .. tostring(err2))

@@ -293,7 +293,7 @@ function dualtranslate:getCurrentFragment()
     return ok and xpointer or nil
 end
 
-function dualtranslate:translateBook(all_chapters, silent, span, auto)
+function dualtranslate:translateBook(all_chapters, silent, span, auto, force_all)
     if not self:isEpub() then return end
     local book_path = self.ui.document.file
     -- "翻译本书" entry (all_chapters == true) honors the 逐章模式 preference:
@@ -304,7 +304,7 @@ function dualtranslate:translateBook(all_chapters, silent, span, auto)
     -- overlay 的 complete 标记判断"本书已翻译"：章节翻译从不写 complete，
     -- 该标记只来自更早某次整书翻译，可能是换语言前的残留，清除缓存后也
     -- 可能指向已删除的语言目录，据此拒绝会让用户再也无法补翻/重翻当前章。
-    if all_chapters and self:isPageTranslationEnabled() then
+    if all_chapters and self:isPageTranslationEnabled() and not force_all then
         all_chapters = false
         span = 1
         self._page_translation_follow_active = true

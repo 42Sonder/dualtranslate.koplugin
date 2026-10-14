@@ -1,6 +1,7 @@
 
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local Dispatcher = require("dispatcher")
 local logger = require("logger")
 local _ = require("gettext")
 local T = require("ffi/util").template
@@ -18,7 +19,56 @@ local dualtranslate = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+-- Expose reader actions through KOReader's Dispatcher. This makes them
+-- discoverable by Taps & Gestures and consumers such as KoboToolBar.
+function dualtranslate:onDispatcherRegisterActions()
+    local is_epub = function()
+        return self:isEpub()
+    end
+
+    Dispatcher:registerAction("dualtranslate_translate_current_chapter", {
+        category = "none",
+        event = "DualTranslateTranslateCurrentChapter",
+        title = _("DualTranslate: Translate current chapter"),
+        reader = true,
+        condition_func = is_epub,
+    })
+    Dispatcher:registerAction("dualtranslate_translate_book", {
+        category = "none",
+        event = "DualTranslateTranslateBook",
+        title = _("DualTranslate: Translate whole book"),
+        reader = true,
+        condition_func = is_epub,
+    })
+    Dispatcher:registerAction("dualtranslate_toggle_translation", {
+        category = "none",
+        event = "DualTranslateToggleTranslation",
+        title = _("DualTranslate: Toggle translation visibility"),
+        reader = true,
+        condition_func = is_epub,
+    })
+end
+
+function dualtranslate:onDualTranslateTranslateCurrentChapter()
+    self:translateBook(false)
+    return true
+end
+
+function dualtranslate:onDualTranslateTranslateBook()
+    -- This action means "whole book", regardless of the menu preference that
+    -- changes the normal "翻译本书" item into chapter-follow mode.
+    self._page_translation_follow_active = nil
+    self:translateBook(true, false, nil, false, true)
+    return true
+end
+
+function dualtranslate:onDualTranslateToggleTranslation()
+    self:toggleTranslationVisible()
+    return true
+end
+
 function dualtranslate:init()
+    self:onDispatcherRegisterActions()
     State.attach(self)
     Reader.attach(self)
     PageTrans.attach(self)
@@ -295,7 +345,8 @@ end
 
 function dualtranslate:buildProviderSelector()
     local items = {}
-    for i, provider in ipairs(Providers.list) do
+    local gettext = _
+    for _, provider in ipairs(Providers.list) do
         -- Lua 5.1: loop variables are shared by every closure created inside
         -- the loop.  Capture the per-iteration values (id and name) so each
         -- row shows its own provider and toggles its own mode.
@@ -311,7 +362,7 @@ function dualtranslate:buildProviderSelector()
             radio = true,
             callback = function()
                 self:saveSetting("mode", pid)
-                TranslationUI.showInfo(T(_("Provider: %1"), pname))
+                TranslationUI.showInfo(T(gettext("Provider: %1"), pname))
             end,
         })
     end
@@ -339,12 +390,13 @@ function dualtranslate:buildLanguageMenu(which)
     end
 
     local is_target = which == "target"
-    for __, lang in ipairs(Languages.list) do
+    local gettext = _
+    for _, lang in ipairs(Languages.list) do
         -- Lua 5.1: capture the per-iteration values; otherwise every row's
         -- closures would use the last language in the list.
         local code, name = lang.code, lang.name
         table.insert(items, {
-            text = string.format("%s (%s)", _(name), code),
+            text = string.format("%s (%s)", gettext(name), code),
             radio = true,
             checked_func = function()
                 local current = is_target and self:getTargetLang() or self:getSourceLang()
